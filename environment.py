@@ -7,99 +7,156 @@ from ROSNode import ROSNode
 
 
 class Env:
-	def __init__(self,height):
+	def __init__(self,height,discrete=False):
 		self.ROSNode=None
 		self.target_pos=None
 		self.height=height
 
 		self.limitbox=[-20,20,-20,20,height-2,height+2]
-
-		
+		self.n_observation=12
+		self.n_action=2
+		self.interact_rate=25
+		self.discrete=discrete
 		self.local_position = None
-		self.actions=[(0,0),
-		(0,-1),(0,1),(-1,0),(1,0)]
 
-		self.alpha=0.5
-		self.state_buf=[]
+	
+		self.state_buf2=[0]*self.n_observation
+		self.last_move=[0]*self.n_action #object's move
+		self.rl_last_act=[0,0] #network's last action
+		self.last_control_err4=[0,0]
+		self.last_control_err3=[0,0]
+		self.last_control_err2=[0,0]
+		self.last_control_err=[0,0]
+		self.cur_control_err=[0,0]
+		self.t_step=0
 		
 	def wait(self):
 		self.ROSNode.hover(1)
 
+	def curve(self,tstep):
+		# if self.env is not None:
+		# 	rate=self.env.ROSNode.rate
+		# else:
+		# 	rate=10
+		# t=1.0*tstep/rate
+		# r=4
+		# if t<20:
+		# 	r=r*(t/20.0)
+		# x=r*np.cos(0.5*t)
+		# y=r*np.sin(0.5*t)
+
+		rate=self.interact_rate
+
+		t=1.0*tstep/rate
+		r=4
+		if t<20:
+			r=r*(t/20.0)
+
+		# x=r*np.cos(0.5*t)+0.5*np.cos(2*t);
+		# y=r*np.sin(0.5*t)+0.5*np.cos(0.5*t);	
+		# x=r*np.cos(0.5*t);
+		# y=r*np.sin(0.5*t);	
+		# if abs(y)>abs(x):
+		# 	y=r*y/abs(y)
+		# else:
+		# 	x=r*x/abs(x)
+		den=abs(np.sin(0.5*t))+abs(np.cos(0.5*t))
+		x=r*np.sin(0.5*t)/den
+		y=r*np.cos(0.5*t)/den
+
+		return x,y
 	#reset all environment
 	def reset(self):
 		self.ROSNode=ROSNode()
 		self.ROSNode.start()
 		self.wait()
-		self.set_target_pos((0,0,self.height))
-		s,_=self.get_state()
-		return s
-
-	def set_target_pos(self,target_pos):
-		self.target_pos=target_pos
-
-	def reachable(self,pos):
-		assert self.target_pos!=None
-		x1,y1,z1=self.target_pos[0],self.target_pos[1],self.target_pos[2]
-		x2,y2,z2=pos[0],pos[1],pos[2]
-		# we do not consider z axis
-		return get_dis(x1,y1,1,x2,y2,1)<2
-
-	def get_state(self):
-		done=False
-		x,y,z,qx,qy,qz,qw=self.ROSNode.get_uav_pos()
-		tx,ty,tz=self.target_pos[0],self.target_pos[1],self.target_pos[2]
-		# print(x,y,z,self.limitbox)
-		if x<self.limitbox[0] or x>self.limitbox[1] or y<self.limitbox[2] or y>self.limitbox[3] or z<self.limitbox[4] or z>self.limitbox[5]:
-			done=True
-		if get_dis(x,y,1,tx,ty,1)>5:
-			done=True
-
-		sx=round((x-tx))+3
-		sy=round((y-ty))+3
-		sz=round((y-tz))+3
-
-		sx=np.clip(sx,0,6)
-		sy=np.clip(sy,0,6)
-		sz=np.clip(sz,0,6)
-
+		self.target_pos=[0,0,self.height]
+		# s,_=self.get_state()
+		self.t_step=0
 		
-		return (sx,sy,sz,qx,qy,qz,qw),done
+		x,y,z,qx,qy,qz,qw=self.ROSNode.get_uav_pos()
+		tx,ty=self.curve(0.0)
+		self.state_buf2=[0]*self.n_observation
+		if self.discrete:
+			return self.state_buf2
+
+		return np.reshape(np.array(self.state_buf2),[-1])
+
+
+
+
 
 
 	#test+visual	
-	def get_gaussian_score(self,uav_pos):
+	def get_dis_score(self,diff):
+		x1,y1,z1=0,0,0
+		x2,y2,z2=diff[0],diff[1],diff[2]
+	
+		dis=get_dis(x1,y1,z1,x2,y2,z2)
+		score=0-dis
+		return score
+
+	def get_gaussian_score(self,diff):
 		score=0
 		sigma_p2=3
 		# attenuation=0.8
-		x1,y1,z1=self.target_pos[0],self.target_pos[1],self.target_pos[2]
-		x2,y2,z2=uav_pos[0],uav_pos[1],uav_pos[2]
+		x1,y1,z1=0,0,0
+		x2,y2,z2=diff[0],diff[1],diff[2]
 	
-		dis=get_dis(x1,y1,0,x2,y2,0)
-		score+=5*np.exp(-( dis**2 / ( sigma_p2 ) ) )
+		dis=get_dis(x1,y1,z1,x2,y2,z2)
+		score+=10*np.exp(-( dis**2 / ( sigma_p2 ) ) )
+		score-=0.8
 
-		return score-0.5
+		return score
 
 
-	# def calculate_reward(self,pos_old,pos_new):
-	# 	old_gaussian_score=self.get_gaussian_score(pos_old)
-	# 	new_gaussian_score=self.get_gaussian_score(pos_new)
-	# 	return new_gaussian_score-old_gaussian_score
 
-	def calculate_reward(self,pos_old,pos_new):
-		old_gaussian_score=self.get_gaussian_score(pos_old)
-		new_gaussian_score=self.get_gaussian_score(pos_new)
-		return new_gaussian_score
 	def step(self,act):
-
-
+		self.t_step+=1
+		self.target_pos[0],self.target_pos[1]=self.curve(self.t_step)
+		self.ROSNode.publish_target_point(self.target_pos[0],self.target_pos[1],self.target_pos[2])
 
 		# print(act)
-		tx=self.actions[act][0]*self.alpha+self.target_pos[0]
-		ty=self.actions[act][1]*self.alpha+self.target_pos[1]
+		tx=act[0]*3+self.target_pos[0]
+		ty=act[1]*3+self.target_pos[1]
 		tz=self.target_pos[2]
 		self.ROSNode.moveto(tx,ty,tz)
-		self.ROSNode.ros_interact_step()
-		s,done=self.get_state()
+		self.ROSNode.ros_interact_step(1.0/self.interact_rate)
+		x,y,z,qx,qy,qz,qw=self.ROSNode.get_uav_pos()
+
+
+	
+
+		r=self.get_dis_score((self.target_pos[0]-x,self.target_pos[1]-y,0))
+		# r-=np.linalg.norm(np.array(act))*0.3
+		done=False
+
+		if x<self.limitbox[0] or x>self.limitbox[1] or y<self.limitbox[2] or y>self.limitbox[3] or z<self.limitbox[4] or z>self.limitbox[5]:
+			done=True
+
+		if get_dis(x,y,z,tx,ty,tz)>10:
+			done=True
+		self.last_control_err4=self.last_control_err3
+		self.last_control_err3=self.last_control_err2
+		self.last_control_err2=self.last_control_err
+		self.last_control_err=self.cur_control_err
+		self.cur_control_err=[self.target_pos[0]-x,self.target_pos[1]-y]
+#         self.state=self.rl_last_act+self.cur_control_err+self.last_control_err+self.last_control_err2
+		new_state=[]
+		new_state.extend(self.rl_last_act)
+		new_state.extend(self.cur_control_err)
+		new_state.extend(self.last_control_err)
+		new_state.extend(self.last_control_err2)
+		new_state.extend(self.last_control_err3)
+		new_state.extend(self.last_control_err4)
+		self.state_buf2=new_state
+		self.rl_last_act=act
+		if self.discrete:
+			tmp=np.reshape(np.array(self.state_buf2),[-1])*3 #increase accuracy...
+			return tmp.round().astype(int).tolist(), r, done
+
+
+		return np.reshape(np.array(self.state_buf2),[-1]), r, done
 
 
 		# print("reward:",r)

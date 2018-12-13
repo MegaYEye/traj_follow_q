@@ -87,7 +87,7 @@ class QLearningAgent:
 
         epsilon = self.epsilon
         
-
+   
         if random.random()<epsilon:
             chosen_action=random.choice(possible_actions)
         else:
